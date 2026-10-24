@@ -1,0 +1,15 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+TestResults/
+WUMTTests/FakesAssemblies/
+
+# Visual Studio user files
+*.suo
+*.user
+.vs/
+
+# Personal / temporary files
+aaa.txt
+*.lnk
+WUMT - *.sln
