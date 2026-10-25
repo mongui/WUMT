@@ -71,9 +71,11 @@ Compressed backups add `.gz` to every file (standard GZip, readable with 7-Zip o
 
 ## Getting started
 
-1. Download the latest version from [here](https://github.com/mongui/WUMT/archive/master.zip) and unzip it.
-2. Build it (see below), or run `WUMT\bin\Release\WUMT.exe` if you already have it.
+1. Download `WUMT-x.y.z.zip` from the [latest release](https://github.com/mongui/WUMT/releases/latest) and unzip it.
+2. Run `WUMT.exe`.
 3. Choose **Backup**, **Restore** or **Copy from an external HD** and follow the steps.
+
+The zip also includes `LEEME.md`, a full guide in Spanish.
 
 ## How to build
 
