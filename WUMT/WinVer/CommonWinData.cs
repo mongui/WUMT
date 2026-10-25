@@ -202,30 +202,84 @@ namespace WUMT.WinVer
             return usr[Folder];
         }
 
-        private static string ReadUserShellFolder(string sid, string profilePath, string folder)
+        /// <summary>
+        /// SID of a user of the list, or null.
+        /// </summary>
+        public string GetUserSid(string user)
         {
-            string value = null;
+            if (Users.Count == 0)
+                FillWindowsUserAccounts();
+            return (user != null && Users.ContainsKey(user)) ? Users[user]["SID"] : null;
+        }
 
-            // The user's registry hive is only loaded while the user is logged in.
-            try
+        /// <summary>
+        /// Profile folder of a user of the list, or null.
+        /// </summary>
+        public string GetUserProfilePath(string user)
+        {
+            if (Users.Count == 0)
+                FillWindowsUserAccounts();
+            return (user != null && Users.ContainsKey(user)) ? Users[user]["ProfilePath"] : null;
+        }
+
+        /// <summary>
+        /// Opens the registry of a user of this computer, or null if not possible.
+        /// </summary>
+        public UserHive OpenUserHive(string user)
+        {
+            string sid = GetUserSid(user);
+            return sid == null ? null : UserHive.Open(sid, GetUserProfilePath(user));
+        }
+
+        /// <summary>
+        /// Persistent network drives of a user (letter, network path).
+        /// For the current user, the drives mapped right now are included too.
+        /// </summary>
+        public Dictionary<string, string> GetUserNetworkDrives(string user)
+        {
+            Dictionary<string, string> drives = new Dictionary<string, string>();
+
+            using (UserHive hive = OpenUserHive(user))
             {
-                using (RegistryKey reg = Registry.Users.OpenSubKey(sid + @"\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"))
-                {
-                    if (reg != null)
-                        value = reg.GetValue(folder, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
-                }
+                if (hive != null)
+                    drives = hive.GetNetworkDrives();
             }
-            catch (Exception)
-            { }
 
-            if (!String.IsNullOrEmpty(value))
+            if (String.Equals(user, GetCurrentUserName(), StringComparison.OrdinalIgnoreCase))
             {
-                // %USERPROFILE% must point to that user, not to the one running the application.
-                value = Regex.Replace(value, Regex.Escape("%USERPROFILE%"), profilePath.Replace("$", "$$"), RegexOptions.IgnoreCase);
-                return Environment.ExpandEnvironmentVariables(value);
+                foreach (KeyValuePair<string, string> drive in GetMappedNetworkDrives())
+                    drives[drive.Key] = drive.Value;
             }
 
-            // Default locations when the hive isn't available.
+            return drives;
+        }
+
+        /// <summary>
+        /// Network printers connected by a user ("\\server\printer").
+        /// </summary>
+        public List<string> GetUserPrinterConnections(string user)
+        {
+            using (UserHive hive = OpenUserHive(user))
+            {
+                return hive == null ? new List<string>() : hive.GetPrinterConnections();
+            }
+        }
+
+        /// <summary>
+        /// Expands a "User Shell Folders" value for a given profile folder.
+        /// </summary>
+        public static string ExpandUserPath(string value, string profilePath)
+        {
+            // %USERPROFILE% must point to that user, not to the one running the application.
+            value = Regex.Replace(value, Regex.Escape("%USERPROFILE%"), profilePath.Replace("$", "$$"), RegexOptions.IgnoreCase);
+            return Environment.ExpandEnvironmentVariables(value);
+        }
+
+        /// <summary>
+        /// Default location of a shell folder inside a profile, or null if it doesn't exist.
+        /// </summary>
+        public static string GetDefaultUserPath(string profilePath, string folder)
+        {
             string[] candidates;
             switch (folder)
             {
@@ -248,6 +302,29 @@ namespace WUMT.WinVer
 
             return null;
         }
+
+        private static string ReadUserShellFolder(string sid, string profilePath, string folder)
+        {
+            string value = null;
+
+            // Opens the user's registry, loading it if the user isn't logged in.
+            try
+            {
+                using (UserHive hive = UserHive.Open(sid, profilePath))
+                {
+                    if (hive != null)
+                        value = hive.GetShellFolder(folder);
+                }
+            }
+            catch (Exception)
+            { }
+
+            if (!String.IsNullOrEmpty(value))
+                return ExpandUserPath(value, profilePath);
+
+            return GetDefaultUserPath(profilePath, folder);
+        }
+
 
         /// <summary>
         /// Searches in the Windows Registry and returns the Product Key used in the machine.

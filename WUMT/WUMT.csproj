@@ -66,12 +66,20 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="BackupRestore.cs" />
+    <Compile Include="FileCopier.cs" />
+    <Compile Include="LongPath.cs" />
+    <Compile Include="Restore.cs" />
     <Compile Include="ExternalDrives.cs" />
     <Compile Include="Settings.cs" />
     <Compile Include="SystemCheck.cs" />
     <Compile Include="WinVer\CommonWinData.cs" />
+    <Compile Include="WinVer\UserHive.cs" />
     <Compile Include="WinVer\Win7.cs" />
     <Compile Include="WUMT.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="WUMT.Restore.cs">
+      <DependentUpon>WUMT.cs</DependentUpon>
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="WUMT.Designer.cs">

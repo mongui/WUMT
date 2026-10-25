@@ -355,7 +355,7 @@
     <value>True</value>
   </metadata>
   <data name="l2IntroSelect.Text" xml:space="preserve">
-    <value>      This is a tool that facilitates moving data between Windows computers. Its main goal is to save time in the process of backup and restoration on a migration process between machines. It is especially useful for companies in equipment updating stages whose employees must acclimate to the new changes of the operating system and software used for the performance of their tasks.</value>
+    <value>WUMT moves user data from one Windows computer to another: back it up on the old one and restore it on the new one, or copy it straight from the old hard disk.</value>
   </data>
   <metadata name="Backup1.Locked" type="System.Boolean, mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089">
     <value>True</value>

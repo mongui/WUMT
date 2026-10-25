@@ -3,20 +3,38 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading;
 using WUMT.WinVer;
 
 namespace WUMT
 {
-    public class Backup
+    /// <summary>
+    /// A long task (backup, restore or copy) run by the wizard in the background.
+    /// </summary>
+    public interface IMigrationJob
     {
+        void Run();
+        void Cancel();
+        bool Cancelled { get; }
+        int CopiedPercentage { get; }
+        string[] Errors { get; }
+        /// <summary>Where the error log was saved, or null.</summary>
+        string LogFile { get; }
+    }
+
+    public class Backup : IMigrationJob
+    {
+        public const string IniName = "Backup.ini";
+
         private class BackupFolder
         {
-            public DirectoryInfo Source;
+            public string Source;
             public string Target; // Relative to the backup folder.
+            public string User;   // Null for extra folders.
+            public string Kind;   // "Desktop", "Personal" or null.
         }
 
         private CommonWinData userData = new CommonWinData();
+        private FileCopier copier = new FileCopier();
 
         public string Destination;
         public string[] Users = new string[0];
@@ -27,15 +45,13 @@ namespace WUMT
         public bool NetworkDrives = false;
         public bool Printers = false;
         public bool RecursiveCopy = true;
+        public bool Compress = false;
 
         private string destFolder;
-        private long totalSize = 0;
-        private long copiedSize = 0;
+        private string logFile;
         private volatile bool isDone = false;
-        private volatile bool cancelRequested = false;
         private List<BackupFolder> folders = new List<BackupFolder>();
         private List<string> warnings = new List<string>();
-        private List<string> errors = new List<string>();
 
         public Backup()
         {
@@ -49,20 +65,12 @@ namespace WUMT
 
         public int CopiedPercentage
         {
-            get
-            {
-                long total = Interlocked.Read(ref totalSize);
-                if (total <= 0)
-                    return 0;
-
-                long percentage = Interlocked.Read(ref copiedSize) * 100 / total;
-                return (int)Math.Min(100, Math.Max(0, percentage));
-            }
+            get { return copier.CopiedPercentage; }
         }
 
         public long CopiedSize
         {
-            get { return Interlocked.Read(ref copiedSize); }
+            get { return copier.CopiedSize; }
         }
 
         public bool IsDone
@@ -72,7 +80,12 @@ namespace WUMT
 
         public bool Cancelled
         {
-            get { return cancelRequested; }
+            get { return copier.Cancelled; }
+        }
+
+        public string LogFile
+        {
+            get { return logFile; }
         }
 
         /// <summary>
@@ -80,7 +93,7 @@ namespace WUMT
         /// </summary>
         public string[] Warnings
         {
-            get { lock (warnings) return warnings.ToArray(); }
+            get { return warnings.ToArray(); }
         }
 
         /// <summary>
@@ -88,19 +101,19 @@ namespace WUMT
         /// </summary>
         public string[] Errors
         {
-            get { lock (errors) return errors.ToArray(); }
+            get { return copier.Errors; }
         }
 
         public void Cancel()
         {
-            cancelRequested = true;
+            copier.Cancel();
         }
 
         public string[] AllFolders()
         {
             string[] result = new string[folders.Count];
             for (int i = 0; i < folders.Count; i++)
-                result[i] = folders[i].Source.FullName;
+                result[i] = folders[i].Source;
 
             return result;
         }
@@ -112,7 +125,7 @@ namespace WUMT
         public void PrepareFolders()
         {
             folders.Clear();
-            lock (warnings) warnings.Clear();
+            warnings.Clear();
 
             foreach (string user in Users)
             {
@@ -124,8 +137,14 @@ namespace WUMT
 
             foreach (string folder in ExtraFolders)
             {
-                AddFolder(folder, GetTargetFromPath(folder));
+                AddFolder(folder, GetTargetFromPath(folder), null, null);
             }
+        }
+
+        public static string GetUserFolderTarget(string user, string shellFolder)
+        {
+            string name = shellFolder == "Personal" ? "Documents" : shellFolder;
+            return Path.Combine(Path.Combine("Users", user), name);
         }
 
         private void AddUserFolder(string user, string shellFolder)
@@ -133,53 +152,56 @@ namespace WUMT
             string path = userData.GetUserPath(user, shellFolder);
             if (String.IsNullOrEmpty(path))
             {
-                AddWarning("Could not find the " + shellFolder + " folder of user " + user + ".");
+                warnings.Add("Could not find the " + shellFolder + " folder of user " + user + ".");
                 return;
             }
 
-            string name = shellFolder == "Personal" ? "Documents" : shellFolder;
-            AddFolder(path, Path.Combine(Path.Combine("Users", user), name));
+            AddFolder(path, GetUserFolderTarget(user, shellFolder), user, shellFolder);
         }
 
-        private void AddFolder(string path, string target)
+        private void AddFolder(string path, string target, string user, string kind)
         {
-            DirectoryInfo dir;
+            string full;
             try
             {
-                dir = new DirectoryInfo(path);
+                full = Path.GetFullPath(path).TrimEnd('\\');
+                if (full.EndsWith(":"))
+                    full += @"\";
             }
             catch (Exception ex)
             {
-                AddWarning("Invalid folder " + path + ": " + ex.Message);
+                warnings.Add("Invalid folder " + path + ": " + ex.Message);
                 return;
             }
 
-            if (!dir.Exists)
+            if (!LongPath.DirectoryExists(full))
             {
-                AddWarning("Folder not found: " + dir.FullName);
+                warnings.Add("Folder not found: " + full);
                 return;
             }
 
             foreach (BackupFolder f in folders)
             {
-                if (String.Equals(f.Source.FullName.TrimEnd('\\'), dir.FullName.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                if (String.Equals(f.Source.TrimEnd('\\'), full.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                     return;
             }
 
             // Copying a folder that contains the destination would copy the backup into itself.
-            if (Destination != null && IsSameOrInside(Path.GetFullPath(Destination), dir.FullName, RecursiveCopy))
+            if (Destination != null && IsSameOrInside(Path.GetFullPath(Destination), full, RecursiveCopy))
             {
-                AddWarning("Skipped " + dir.FullName + " because it contains the backup destination.");
+                warnings.Add("Skipped " + full + " because it contains the backup destination.");
                 return;
             }
 
             BackupFolder bf = new BackupFolder();
-            bf.Source = dir;
+            bf.Source = full;
             bf.Target = target;
+            bf.User = user;
+            bf.Kind = kind;
             folders.Add(bf);
         }
 
-        private static bool IsSameOrInside(string path, string folder, bool includeSubfolders)
+        internal static bool IsSameOrInside(string path, string folder, bool includeSubfolders)
         {
             string p = path.TrimEnd('\\') + @"\";
             string f = folder.TrimEnd('\\') + @"\";
@@ -194,7 +216,7 @@ namespace WUMT
         /// "C:\Data" goes to "C\Data" and "\\server\share\Data" to "UNC\server\share\Data",
         /// so folders with the same name on different drives don't overwrite each other.
         /// </summary>
-        private static string GetTargetFromPath(string path)
+        public static string GetTargetFromPath(string path)
         {
             string full;
             try
@@ -221,21 +243,31 @@ namespace WUMT
             long size = 0;
 
             foreach (BackupFolder folder in folders)
-            {
-                size += GetDirectorySize(folder.Source, RecursiveCopy, null);
-            }
+                size += FileCopier.Measure(folder.Source, RecursiveCopy);
 
             return size;
+        }
+
+        public void Run()
+        {
+            StartBackup();
         }
 
         public void StartBackup()
         {
             Directory.CreateDirectory(BackupPath);
 
-            Ini iniFile = new Ini(Path.Combine(BackupPath, "Backup.ini"));
+            // A file that starts with a UTF-16 BOM makes Windows write the INI in Unicode.
+            string iniPath = Path.Combine(BackupPath, IniName);
+            File.WriteAllBytes(iniPath, new byte[] { 0xFF, 0xFE });
+            Ini iniFile = new Ini(iniPath);
+            iniFile.Write("Global", "Version", "2");
+            iniFile.Write("Global", "Date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            iniFile.Write("Global", "Computer", Environment.MachineName);
             iniFile.Write("Global", "Destination", Destination);
             iniFile.Write("Global", "UserList", String.Join(",", Users));
             iniFile.Write("Global", "RecursiveCopy", RecursiveCopy.ToString());
+            iniFile.Write("Global", "Compressed", Compress.ToString());
 
             foreach (string user in Users)
             {
@@ -243,33 +275,48 @@ namespace WUMT
                     iniFile.Write(user, "Desktop", userData.GetUserPath(user, "Desktop"));
                 if (Personal)
                     iniFile.Write(user, "Personal", userData.GetUserPath(user, "Personal"));
-            }
 
-            int i;
-
-            // Mapped drives can only be read for the user running the application.
-            if (NetworkDrives)
-            {
-                try
+                if (NetworkDrives)
                 {
-                    i = 0;
-                    foreach (KeyValuePair<string, string> nDrv in userData.GetMappedNetworkDrives())
+                    try
                     {
-                        iniFile.Write("NetworkDrives", "NetworkDrive-" + i, nDrv.Key + "||" + nDrv.Value);
-                        i++;
+                        int i = 0;
+                        foreach (KeyValuePair<string, string> nDrv in userData.GetUserNetworkDrives(user))
+                        {
+                            iniFile.Write(user, "NetworkDrive-" + i, nDrv.Key + "||" + nDrv.Value);
+                            i++;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        copier.AddError("Could not read the network drives of " + user + ": " + ex.Message);
                     }
                 }
-                catch (Exception ex)
+
+                if (Printers)
                 {
-                    AddError("Could not read the network drives: " + ex.Message);
+                    try
+                    {
+                        int i = 0;
+                        foreach (string printer in userData.GetUserPrinterConnections(user))
+                        {
+                            iniFile.Write(user, "Printer-" + i, printer);
+                            i++;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        copier.AddError("Could not read the printers of " + user + ": " + ex.Message);
+                    }
                 }
             }
 
+            // All the printers installed in the computer, for reference.
             if (Printers)
             {
                 try
                 {
-                    i = 0;
+                    int i = 0;
                     foreach (KeyValuePair<string, string[]> nPrns in userData.GetMappedPrinters())
                     {
                         foreach (string nPr in nPrns.Value)
@@ -281,155 +328,48 @@ namespace WUMT
                 }
                 catch (Exception ex)
                 {
-                    AddError("Could not read the printers: " + ex.Message);
+                    copier.AddError("Could not read the printers: " + ex.Message);
                 }
             }
 
+            int extra = 0;
             for (int j = 0; j < folders.Count; j++)
-                iniFile.Write("All", j.ToString(), folders[j].Source.FullName + "||" + folders[j].Target);
+            {
+                iniFile.Write("All", j.ToString(), folders[j].Source + "||" + folders[j].Target);
+                if (folders[j].User == null)
+                {
+                    iniFile.Write("Extra", extra.ToString(), folders[j].Source + "||" + folders[j].Target);
+                    extra++;
+                }
+            }
 
-            Interlocked.Exchange(ref totalSize, GetTotalSize());
+            copier.Compress = Compress;
+            copier.TotalSize = GetTotalSize();
 
-            StartCopy();
+            foreach (BackupFolder folder in folders)
+            {
+                if (copier.Cancelled)
+                    break;
+
+                copier.CopyDirectory(folder.Source, LongPath.Combine(BackupPath, folder.Target), RecursiveCopy);
+            }
+
+            isDone = true;
 
             string[] errorList = Errors;
             if (errorList.Length > 0)
             {
                 try
                 {
-                    File.WriteAllLines(Path.Combine(BackupPath, "Errors.log"), errorList);
+                    logFile = Path.Combine(BackupPath, "Errors.log");
+                    File.WriteAllLines(logFile, errorList);
                 }
-                catch (Exception) { }
-            }
-        }
-
-        public void StartCopy()
-        {
-            foreach (BackupFolder folder in folders)
-            {
-                if (cancelRequested)
-                    break;
-
-                CopyDirectory(folder.Source, Path.Combine(BackupPath, folder.Target), RecursiveCopy);
-            }
-
-            isDone = true;
-        }
-
-        private void CopyDirectory(DirectoryInfo source, string destDirectory, bool recursive)
-        {
-            FileInfo[] files;
-            try
-            {
-                Directory.CreateDirectory(destDirectory);
-                files = source.GetFiles();
-            }
-            catch (Exception ex)
-            {
-                AddError(source.FullName + ": " + ex.Message);
-                return;
-            }
-
-            foreach (FileInfo file in files)
-            {
-                if (cancelRequested)
-                    return;
-
-                try
+                catch (Exception)
                 {
-                    string target = Path.Combine(destDirectory, file.Name);
-
-                    // Overwriting a read-only file fails, so clear the attribute first.
-                    if (File.Exists(target))
-                        File.SetAttributes(target, FileAttributes.Normal);
-
-                    file.CopyTo(target, true);
-                }
-                catch (Exception ex)
-                {
-                    AddError(file.FullName + ": " + ex.Message);
-                }
-
-                Interlocked.Add(ref copiedSize, file.Length);
-            }
-
-            if (!recursive)
-                return;
-
-            foreach (DirectoryInfo directory in GetSubdirectories(source, this))
-            {
-                if (cancelRequested)
-                    return;
-
-                CopyDirectory(directory, Path.Combine(destDirectory, directory.Name), true);
-            }
-        }
-
-        /// <summary>
-        /// Size of the files in a folder. Skips folders that can't be read.
-        /// </summary>
-        internal static long GetDirectorySize(DirectoryInfo source, bool recursive, Backup owner)
-        {
-            long size = 0;
-
-            try
-            {
-                foreach (FileInfo fi in source.GetFiles())
-                    size += fi.Length;
-            }
-            catch (Exception)
-            {
-                return 0;
-            }
-
-            if (recursive)
-            {
-                foreach (DirectoryInfo di in GetSubdirectories(source, owner))
-                    size += GetDirectorySize(di, true, owner);
-            }
-
-            return size;
-        }
-
-        /// <summary>
-        /// Subfolders, without junctions and symbolic links ("My Music" inside Documents, etc.),
-        /// which are usually not readable and point to folders that are copied anyway.
-        /// </summary>
-        private static List<DirectoryInfo> GetSubdirectories(DirectoryInfo source, Backup owner)
-        {
-            List<DirectoryInfo> result = new List<DirectoryInfo>();
-
-            try
-            {
-                foreach (DirectoryInfo di in source.GetDirectories())
-                {
-                    if ((di.Attributes & FileAttributes.ReparsePoint) == 0)
-                        result.Add(di);
+                    logFile = null;
                 }
             }
-            catch (Exception ex)
-            {
-                if (owner != null)
-                    owner.AddError(source.FullName + ": " + ex.Message);
-            }
-
-            return result;
         }
-
-        private void AddWarning(string message)
-        {
-            lock (warnings) warnings.Add(message);
-        }
-
-        private void AddError(string message)
-        {
-            lock (errors) errors.Add(message);
-        }
-    }
-
-    // TODO: restore is not implemented yet.
-    public class Restore
-    {
     }
 
     /// <summary>
@@ -443,7 +383,7 @@ namespace WUMT
         /// </summary>
         public static long DirectorySize(this DirectoryInfo source)
         {
-            return Backup.GetDirectorySize(source, true, null);
+            return FileCopier.Measure(source.FullName, true);
         }
     }
 
@@ -452,10 +392,12 @@ namespace WUMT
     /// </summary>
     public class Ini
     {
+        private const int BufferSize = 32767;
+
         [DllImport("kernel32", CharSet = CharSet.Unicode)]
         private static extern bool WritePrivateProfileString(string section, string key, string val, string filePath);
         [DllImport("kernel32", CharSet = CharSet.Unicode)]
-        private static extern int GetPrivateProfileString(string section, string key, string def, StringBuilder retVal, int size, string filePath);
+        private static extern int GetPrivateProfileString(string section, string key, string def, char[] retVal, int size, string filePath);
 
         private string path;
 
@@ -477,9 +419,35 @@ namespace WUMT
         /// </summary>
         public string Read(string Section, string Key)
         {
-            StringBuilder temp = new StringBuilder(1024);
-            GetPrivateProfileString(Section, Key, "", temp, temp.Capacity, this.path);
-            return temp.ToString();
+            char[] buffer = new char[BufferSize];
+            int length = GetPrivateProfileString(Section, Key, "", buffer, buffer.Length, this.path);
+            return new string(buffer, 0, length);
+        }
+
+        /// <summary>
+        /// Names of all the sections.
+        /// </summary>
+        public string[] GetSections()
+        {
+            return ReadList(null);
+        }
+
+        /// <summary>
+        /// Names of all the keys of a section.
+        /// </summary>
+        public string[] GetKeys(string Section)
+        {
+            return ReadList(Section);
+        }
+
+        private string[] ReadList(string section)
+        {
+            char[] buffer = new char[BufferSize];
+            int length = GetPrivateProfileString(section, null, "", buffer, buffer.Length, this.path);
+            if (length <= 0)
+                return new string[0];
+
+            return new string(buffer, 0, length).Split(new char[] { '\0' }, StringSplitOptions.RemoveEmptyEntries);
         }
     }
 }

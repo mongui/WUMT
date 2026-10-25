@@ -38,7 +38,5 @@ Then, open the solution with Visual Studio and Compile/Run it.
 
 ## TODO
 
-- Code the 'Restore' part.
 - Add code comments.
 - Add more backup options.
-- Add direct data copy from an old computer hard drive connected to a new computer.

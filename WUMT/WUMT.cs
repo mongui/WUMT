@@ -12,38 +12,46 @@ namespace WUMT
 {
     public partial class WUMT : Form
     {
+        private enum WizardMode { Backup, Restore, Copy }
+
         // Placeholder text for nodes whose subfolders haven't been loaded yet.
         private const string DummyNode = "...";
 
-        // Tab page setter.
+        // Tab page setter. Backup pages are the odd ones, Restore/Copy pages the even ones.
         private int step = 0;
+        private WizardMode mode = WizardMode.Backup;
         private Backup backup;
+
+        // The task running in the background and the controls that show its progress.
+        private IMigrationJob job;
+        private TextBox jobStatus;
+        private ProgressBar jobProgress;
 
         private BackgroundWorker bw = new BackgroundWorker();
         private Timer progressTimer = new Timer();
-        private bool backupRunning = false;
-        private bool backupFinished = false;
+        private bool jobRunning = false;
+        private bool jobFinished = false;
         private bool closeWhenDone = false;
         private string collectedTemplate;
 
         public WUMT()
         {
             InitializeComponent();
+            InitializeRestorePages();
 
             collectedTemplate = b4l2Collected.Text;
 
-            bw.WorkerSupportsCancellation = true;
             bw.DoWork += (sender, args) =>
             {
-                backup.StartBackup();
+                job.Run();
             };
-            bw.RunWorkerCompleted += BackupCompleted;
+            bw.RunWorkerCompleted += JobCompleted;
 
             progressTimer.Interval = 500;
             progressTimer.Tick += (sender, args) =>
             {
-                if (backup != null)
-                    b4progressBar.Value = backup.CopiedPercentage;
+                if (job != null)
+                    jobProgress.Value = job.CopiedPercentage;
             };
         }
 
@@ -61,12 +69,12 @@ namespace WUMT
 
         private void WUMT_FormClosing(object sender, FormClosingEventArgs e)
         {
-            if (backupRunning)
+            if (jobRunning)
             {
-                if (MessageBox.Show("A backup is running. Do you want to cancel it and exit?", Text,
+                if (MessageBox.Show("A copy is running. Do you want to cancel it and exit?", Text,
                     MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                 {
-                    backup.Cancel();
+                    job.Cancel();
                     closeWhenDone = true; // Closes when the worker finishes.
                 }
                 e.Cancel = true;
@@ -75,14 +83,14 @@ namespace WUMT
 
         private void bBack_Click(object sender, EventArgs e)
         {
-            if (backupRunning)
+            if (jobRunning)
             {
-                if (MessageBox.Show("Do you want to cancel the backup?", Text,
+                if (MessageBox.Show("Do you want to cancel the copy?", Text,
                     MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
                 {
-                    backup.Cancel();
+                    job.Cancel();
                     bBack.Enabled = false;
-                    b4tStatus.AppendText("Cancelling...\r\n");
+                    jobStatus.AppendText("Cancelling...\r\n");
                 }
                 return;
             }
@@ -97,29 +105,51 @@ namespace WUMT
 
         private void bNext_Click(object sender, EventArgs e)
         {
-            if (backupFinished)
+            if (jobFinished)
             {
                 Close();
                 return;
             }
 
-            if (step == 1 && !ValidateDestination())
+            if (!ValidateStep())
                 return;
 
-            if (step == 3 && b2lbUsers.SelectedItems.Count == 0)
+            if (step == 7)
             {
-                MessageBox.Show("Select at least one user account.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
+                StartJob(backup, b4tStatus, b4progressBar, "Copying to " + backup.BackupPath + "...");
             }
-
-            if (step == 7 /*|| step == start restore */)
+            else if (step == 8)
             {
-                StartBackup();
+                StartJob(restore, r4tStatus, r4progressBar, "Copying...");
             }
             else
             {
                 step += 2;
                 SetTabIndex();
+            }
+        }
+
+        private bool ValidateStep()
+        {
+            switch (step)
+            {
+                case 1:
+                    return ValidateDestination();
+                case 3:
+                    if (b2lbUsers.SelectedItems.Count == 0)
+                    {
+                        MessageBox.Show("Select at least one user account.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return false;
+                    }
+                    return true;
+                case 2:
+                    return ValidateRestoreSource();
+                case 4:
+                    return ValidateRestoreUsers();
+                case 6:
+                    return ValidateRestoreFolders();
+                default:
+                    return true;
             }
         }
 
@@ -129,6 +159,7 @@ namespace WUMT
             bBack.Text = "< &Back";
             bBack.Visible = step != 0;
             bNext.Visible = step != 0;
+            bNext.Enabled = true;
 
             if (step == 0)
             {
@@ -154,6 +185,10 @@ namespace WUMT
                 bNext.Text = "Start";
                 bNext.Enabled = PrepareBackup();
             }
+            else if (step % 2 == 0)
+            {
+                ShowRestorePage();
+            }
 
             Panels.SelectedIndex = step;
         }
@@ -166,7 +201,8 @@ namespace WUMT
         // IntroSelect.
         private void bBackup_Click(object sender, EventArgs e)
         {
-            step++;
+            mode = WizardMode.Backup;
+            step = 1;
 
             lBackupRestore.Text = "Backup";
             SetTabIndex();
@@ -174,9 +210,19 @@ namespace WUMT
 
         private void bRestore_Click(object sender, EventArgs e)
         {
-            step += 2;
+            mode = WizardMode.Restore;
+            step = 2;
 
             lBackupRestore.Text = "Restore";
+            SetTabIndex();
+        }
+
+        private void bCopy_Click(object sender, EventArgs e)
+        {
+            mode = WizardMode.Copy;
+            step = 2;
+
+            lBackupRestore.Text = "Copy from an external HD";
             SetTabIndex();
         }
 
@@ -348,6 +394,7 @@ namespace WUMT
             try
             {
                 backup.Destination = b1tDestination.Text.Trim();
+                backup.Compress = b1cCompress.Checked;
                 backup.Desktop = b2cDesktop.Checked;
                 backup.Personal = b2cMyDocs.Checked;
                 backup.NetworkDrives = b2cNetworkDrives.Checked;
@@ -368,7 +415,8 @@ namespace WUMT
 
                 if (backup.AllFolders().Length > 0)
                 {
-                    status.Append("The following folders " + (backup.RecursiveCopy ? "and subfolders " : "") + "will be backed up:\r\n");
+                    status.Append("The following folders " + (backup.RecursiveCopy ? "and subfolders " : "") + "will be backed up"
+                        + (backup.Compress ? " (compressed)" : "") + ":\r\n");
 
                     foreach (string folder in backup.AllFolders())
                         status.Append(folder + "\r\n");
@@ -379,7 +427,7 @@ namespace WUMT
                 }
 
                 float totalSize = backup.GetTotalSize();
-                status.Append("The total size of files to be copied is: " + String.Format("{0:0,0.0}", totalSize / 1024 / 1024) + "MB (" + String.Format("{0:0,0}", totalSize) + " bytes).\r\n");
+                status.Append("The total size of files to be copied is: " + String.Format("{0:#,0.0}", totalSize / 1024 / 1024) + "MB (" + String.Format("{0:#,0}", totalSize) + " bytes).\r\n");
 
                 b4tStatus.Text = status.ToString();
                 b4tStatus.DeselectAll();
@@ -392,51 +440,67 @@ namespace WUMT
             }
         }
 
-        private void StartBackup()
+
+        /* ****************************************************************************** */
+        /* *                             RUNNING A COPY                                 * */
+        /* ****************************************************************************** */
+
+        private void StartJob(IMigrationJob newJob, TextBox status, ProgressBar progress, string message)
         {
-            backupRunning = true;
+            job = newJob;
+            jobStatus = status;
+            jobProgress = progress;
+
+            jobRunning = true;
             bNext.Enabled = false;
             bBack.Text = "Cancel";
-            b4tStatus.AppendText("Copying to " + backup.BackupPath + "...\r\n");
+            jobStatus.AppendText(message + "\r\n");
 
             progressTimer.Start();
             bw.RunWorkerAsync();
         }
 
-        private void BackupCompleted(object sender, RunWorkerCompletedEventArgs args)
+        private void JobCompleted(object sender, RunWorkerCompletedEventArgs args)
         {
-            backupRunning = false;
+            jobRunning = false;
             progressTimer.Stop();
 
             if (args.Error != null)
             {
-                b4tStatus.AppendText("The backup failed: " + args.Error.Message + "\r\n");
+                jobStatus.AppendText("Failed: " + args.Error.Message + "\r\n");
             }
             else
             {
-                string[] errors = backup.Errors;
+                Restore r = job as Restore;
+                if (r != null)
+                    foreach (string note in r.Notes)
+                        jobStatus.AppendText("Note: " + note + "\r\n");
+
+                string[] errors = job.Errors;
                 if (errors.Length > 0)
                 {
                     const int maxShown = 50;
-                    b4tStatus.AppendText(errors.Length + " files or folders could not be copied:\r\n");
+                    jobStatus.AppendText(errors.Length + " problems:\r\n");
                     for (int i = 0; i < errors.Length && i < maxShown; i++)
-                        b4tStatus.AppendText(errors[i] + "\r\n");
+                        jobStatus.AppendText(errors[i] + "\r\n");
                     if (errors.Length > maxShown)
-                        b4tStatus.AppendText("... (see Errors.log in the backup folder)\r\n");
+                        jobStatus.AppendText("...\r\n");
+                    if (job.LogFile != null)
+                        jobStatus.AppendText("Full list saved in " + job.LogFile + "\r\n");
                 }
 
-                if (backup.Cancelled)
+                if (job.Cancelled)
                 {
-                    b4tStatus.AppendText("Cancelled.\r\n");
+                    jobStatus.AppendText("Cancelled by the user.\r\n");
                 }
                 else
                 {
-                    b4progressBar.Value = 100;
-                    b4tStatus.AppendText(errors.Length > 0 ? "Done, with errors.\r\n" : "Done.\r\n");
+                    jobProgress.Value = 100;
+                    jobStatus.AppendText(errors.Length > 0 ? "Finished with errors.\r\n" : "Done.\r\n");
                 }
             }
 
-            backupFinished = true;
+            jobFinished = true;
             bBack.Visible = false;
             bBack.Enabled = true;
             bNext.Enabled = true;

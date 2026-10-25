@@ -263,7 +263,6 @@
             this.bRestore.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
             this.bRestore.UseVisualStyleBackColor = true;
             this.bRestore.Click += new System.EventHandler(this.bRestore_Click);
-            this.bRestore.Enabled = false; // TODO: restore is not implemented yet.
             // 
             // bCopy
             // 
@@ -280,7 +279,7 @@
             this.bCopy.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             this.bCopy.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
             this.bCopy.UseVisualStyleBackColor = true;
-            this.bCopy.Enabled = false; // TODO: not implemented yet.
+            this.bCopy.Click += new System.EventHandler(this.bCopy_Click);
             // 
             // Backup1
             // 
@@ -327,17 +326,16 @@
             this.b1lRecommendation.Name = "b1lRecommendation";
             this.b1lRecommendation.Size = new System.Drawing.Size(620, 22);
             this.b1lRecommendation.TabIndex = 4;
-            this.b1lRecommendation.Text = "It is highly recommended that is preferably located on a removable drive.";
+            this.b1lRecommendation.Text = "We recommend saving the backup on a removable drive.";
             // 
             // b1cCompress
             // 
             this.b1cCompress.AutoSize = true;
-            this.b1cCompress.Enabled = false;
             this.b1cCompress.Location = new System.Drawing.Point(86, 117);
             this.b1cCompress.Name = "b1cCompress";
             this.b1cCompress.Size = new System.Drawing.Size(233, 17);
             this.b1cCompress.TabIndex = 5;
-            this.b1cCompress.Text = "Compress all files when backing up. (slower)";
+            this.b1cCompress.Text = "Compress files (smaller, but slower)";
             this.b1cCompress.UseVisualStyleBackColor = true;
             // 
             // b1bExamine
@@ -358,7 +356,7 @@
             this.b1lDestination.Name = "b1lDestination";
             this.b1lDestination.Size = new System.Drawing.Size(41, 13);
             this.b1lDestination.TabIndex = 1;
-            this.b1lDestination.Text = "Target:";
+            this.b1lDestination.Text = "Destination:";
             // 
             // b1lSelDest
             // 
@@ -368,8 +366,8 @@
             this.b1lSelDest.Name = "b1lSelDest";
             this.b1lSelDest.Size = new System.Drawing.Size(620, 34);
             this.b1lSelDest.TabIndex = 0;
-            this.b1lSelDest.Text = "Select a target place where the data will be backed up. In this will create a fol" +
-    "der in which files from this computer are to be copied.";
+            this.b1lSelDest.Text = "Choose where to save the backup. A new folder will be created there for the files" +
+    " of this computer.";
             // 
             // Restore1
             // 
@@ -416,7 +414,7 @@
             this.b2cPrinters.Name = "b2cPrinters";
             this.b2cPrinters.Size = new System.Drawing.Size(61, 17);
             this.b2cPrinters.TabIndex = 8;
-            this.b2cPrinters.Text = "Printers";
+            this.b2cPrinters.Text = "Network printers";
             this.b2cPrinters.UseVisualStyleBackColor = true;
             // 
             // b2cNetworkDrives
@@ -463,7 +461,7 @@
             this.b2Folders.Name = "b2Folders";
             this.b2Folders.Size = new System.Drawing.Size(612, 19);
             this.b2Folders.TabIndex = 4;
-            this.b2Folders.Text = "Select which folders will be saved:";
+            this.b2Folders.Text = "What to back up for each user:";
             // 
             // b2lSelectAccounts
             // 
@@ -473,8 +471,8 @@
             this.b2lSelectAccounts.Name = "b2lSelectAccounts";
             this.b2lSelectAccounts.Size = new System.Drawing.Size(612, 34);
             this.b2lSelectAccounts.TabIndex = 3;
-            this.b2lSelectAccounts.Text = "Select which user accounts will be saved. If you want to back up others than your" +
-    " user account data, you must be sure to have administrator level rights.\r\n";
+            this.b2lSelectAccounts.Text = "Select the user accounts to back up. To back up other user accounts, run WUMT as a" +
+    "dministrator.";
             // 
             // b2AvailableUsers
             // 
@@ -535,7 +533,7 @@
             this.c3cSubfolders.Name = "c3cSubfolders";
             this.c3cSubfolders.Size = new System.Drawing.Size(126, 17);
             this.c3cSubfolders.TabIndex = 2;
-            this.c3cSubfolders.Text = "Also copy subfolders.";
+            this.c3cSubfolders.Text = "Also copy subfolders";
             this.c3cSubfolders.UseVisualStyleBackColor = true;
             // 
             // b3tvOtherFolders
@@ -557,7 +555,7 @@
             this.b3OtherFolders.Name = "b3OtherFolders";
             this.b3OtherFolders.Size = new System.Drawing.Size(187, 13);
             this.b3OtherFolders.TabIndex = 0;
-            this.b3OtherFolders.Text = "Do you want to save any other folder?";
+            this.b3OtherFolders.Text = "Do you want to back up other folders?";
             // 
             // Restore3
             // 
@@ -610,9 +608,8 @@
             this.b4l2Collected.Name = "b4l2Collected";
             this.b4l2Collected.Size = new System.Drawing.Size(619, 39);
             this.b4l2Collected.TabIndex = 10;
-            this.b4l2Collected.Text = "The application has collected all the information needed to make the backup. Plea" +
-    "se, before start make sure that the selected destination drive (%DST_DRIVE%) has" +
-    " enough space to save all the data.";
+            this.b4l2Collected.Text = "Check the summary and press Start. Before starting, make sure that the destinatio" +
+    "n drive (%DST_DRIVE%) has enough free space.";
             // 
             // b4l1Ready
             // 
@@ -624,7 +621,7 @@
             this.b4l1Ready.Name = "b4l1Ready";
             this.b4l1Ready.Size = new System.Drawing.Size(167, 25);
             this.b4l1Ready.TabIndex = 9;
-            this.b4l1Ready.Text = "Ready to start.";
+            this.b4l1Ready.Text = "Everything is ready.";
             // 
             // Restore4
             // 
@@ -650,7 +647,7 @@
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.Name = "WUMT";
-            this.Text = "Windows Userdata Migration Tool 1.0";
+            this.Text = "Windows Userdata Migration Tool";
             this.Load += new System.EventHandler(this.WUMT_Load);
             this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.WUMT_FormClosing);
             this.panelTitle.ResumeLayout(false);
